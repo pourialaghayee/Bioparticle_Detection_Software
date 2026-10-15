@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QGroupBox, QFormLayout, QSplitter, QTabWidget, QGraphicsView,
     QGraphicsScene, QSlider, QProgressBar, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QScrollArea,
-    QSizePolicy,
+    QSizePolicy, QLayout,
 )
 
 from counter_core import (Analysis, Cancelled, DetectorSettings, analyse,
@@ -197,6 +197,7 @@ class MainWindow(QMainWindow):
         side = QWidget()
         left = QVBoxLayout(side)
         left.setContentsMargins(0, 0, 10, 0)
+        left.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         source_group = QGroupBox("1  Load a microscope stack")
         source_layout = QVBoxLayout(source_group)
@@ -262,6 +263,8 @@ class MainWindow(QMainWindow):
         note.setObjectName("muted")
         visual_form.addRow(note)
         self.fit_button = QPushButton("Fit image")
+        self.fit_button.setToolTip("Show the whole image again after zooming or panning. "
+                                   "Counts and saved images are unchanged.")
         self.fit_button.clicked.connect(self.fit_images)
         visual_form.addRow(self.fit_button)
         left.addWidget(visual_group)
@@ -303,12 +306,18 @@ class MainWindow(QMainWindow):
         output_layout.addWidget(self.save_stack_button)
         left.addWidget(output_group)
         left.addStretch()
-        # Long filenames and paths must wrap inside the sidebar, not force a
-        # wider child widget and push buttons outside the visible scroll area.
+        # Let wrapped labels use the available width and reserve their full
+        # height. A fixed width cap makes Qt underestimate their wrapped height
+        # in a wider sidebar; shrinking vertically then clips the first/last lines.
         for text_label in side.findChildren(QLabel):
             text_label.setMinimumWidth(0)
-            text_label.setMaximumWidth(294)
-            text_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            policy = QSizePolicy(
+                QSizePolicy.Policy.Ignored if text_label.wordWrap() else QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Minimum)
+            policy.setHeightForWidth(text_label.wordWrap())
+            text_label.setSizePolicy(policy)
+            if text_label.wordWrap():
+                text_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         side_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         side_scroll.setWidget(side)
         splitter.addWidget(side_scroll)

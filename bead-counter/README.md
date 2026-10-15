@@ -85,7 +85,7 @@ The launcher prefers `python3.12` when available. The Linux `apt` commands do no
 5. Open **All counted beads** for the combined image. **Open results folder** shows the saved files.
 6. **Save boxed TIFF movie…** exports the annotated frames as an image stack for Fiji/ImageJ. It is a TIFF stack rather than an MP4.
 
-Boxes start at **40 × 40 pixels**. Mouse wheel zooms, dragging pans, and **Fit image** restores the full view. Box size, image contrast, playback delay and label visibility affect only the display. Changing **Detection settings** requires counting again.
+Boxes start at **40 × 40 pixels**. Mouse wheel zooms and dragging pans. After zooming or panning, click **Fit image** to see the whole image again; it resets the view without changing the count or saved image. Box size, image contrast, playback delay and label visibility affect only the display. Changing **Detection settings** requires counting again.
 
 Use **File → Open saved result…** to reopen an analysis without rerunning detection. Keep the source HDF5 file available. A moved recording can be located when prompted; its checksum is checked before saved overlays are shown.
 
@@ -140,6 +140,8 @@ Each run creates a separate folder under `results/<recording>_<timestamp>/`.
 | `boxed_stack.tif` | Optional RGB TIFF stack with boxes, IDs and brightness |
 
 The combined image takes the largest value at each pixel across all frames. Counting uses the **individual frames**, then event IDs are drawn on the combined image. Repeated positions may share a box listing several IDs; nearby labels may overlap. CSV files preserve the separate records.
+
+Share **all_beads.png** for the combined overview, event IDs and total count. Include **boxed_stack.tif** when your colleague needs to inspect detections frame by frame.
 
 Boxed TIFFs contain 8-bit RGB display images. Quantitative raw values remain in the HDF5 recording. GUI frame numbers and `*_frame_number` fields start at 1; `frame_index`, `first_frame`, `last_frame` and pixel coordinates start at 0.
 

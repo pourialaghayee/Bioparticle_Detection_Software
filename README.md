@@ -60,6 +60,8 @@ The software has been verified on Linux. Windows and macOS instructions are prov
 5. Open **All counted beads** for the combined image, or **Open results folder** to inspect saved files.
 6. Use **Save boxed TIFF movie…** to export the annotated frame stack for Fiji/ImageJ.
 
+**Fit image** resets zoom and pan so the whole image is visible. It changes only the view, leaving counts and saved images unchanged.
+
 The input must contain a numeric image array with axes **frame × height × width** and at least three frames. Box size, image contrast, and playback speed change only the display.
 
 ## How counting works
@@ -81,6 +83,8 @@ Each run creates a new folder inside `bead-counter/results/`.
 | `per_frame.csv` and `summary.json` | Frame counts, totals, metadata, and settings |
 | `maximum_projection_raw.tif` | Combined projection without overlays |
 | `boxed_stack.tif` | Optional movie stack with boxes, IDs, and brightness |
+
+Share **all_beads.png** for the overview, IDs and count; include **boxed_stack.tif** for frame-by-frame inspection.
 
 Counting uses the individual frames; the combined image is a visual summary. Original HDF5 recordings are opened read-only.
 
