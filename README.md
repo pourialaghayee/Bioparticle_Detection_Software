@@ -1,6 +1,6 @@
 # Polimi Bead Counter
 
-A Python desktop app for finding and counting bead appearances in microscope movies. Load an HDF5 recording, inspect detections frame by frame, and export a combined image and count tables.
+A Python interface for finding and counting bead appearances in microscope movies. Load an HDF5 recording, inspect detections frame by frame, and export a combined image and count tables.
 
 **Source code:** [bead-counter](bead-counter/) · **Detailed guide:** [software documentation](bead-counter/README.md)
 
