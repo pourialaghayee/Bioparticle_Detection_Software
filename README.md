@@ -39,7 +39,14 @@ Use the virtual-environment package matching your Python version. These packages
 
 ### Windows
 
-Install Python 3.12 with the Python launcher. Download or clone the repository, open `bead-counter`, and double-click **`run_windows.bat`**.
+1. **Install Python 3.12** from [python.org](https://www.python.org/downloads/windows/) using the 64-bit Windows installer. Keep **py launcher** selected; adding Python to PATH is optional.
+2. **Download the code:** on GitHub, click **Code → Download ZIP**, then right-click the ZIP and choose **Extract All…**.
+3. **Move it to a short folder.** Inside the extracted folder is another `Pollimi-Software-master` folder containing `bead-counter`. Move that inner folder to `C:\` and rename it `Polimi`, so the app is in `C:\Polimi\bead-counter`. Windows limits file paths to 260 characters, and a folder inside `Downloads` is usually too long for the installed Qt files.
+4. **Start the app:** open `C:\Polimi\bead-counter` and double-click **`run_windows.bat`**. If Windows shows *Windows protected your PC*, click **More info → Run anyway**.
+
+The first start takes a few minutes and needs internet access to install the packages. Later starts take seconds. The black Command Prompt window stays open while the app runs; closing it also closes the app.
+
+To update, download the new ZIP, copy your `results` folder somewhere safe, and replace the old `C:\Polimi` folder. With [Git for Windows](https://git-scm.com/download/win) installed, you can instead clone the repository into `C:\Polimi` and update with `git pull`. See the [Windows guide](bead-counter/README.md#windows-setup) for Command Prompt use and troubleshooting.
 
 ### macOS
 

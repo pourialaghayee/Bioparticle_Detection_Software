@@ -51,11 +51,20 @@ An existing `.venv/` is reused. Rename or remove it before switching Python vers
 
 ## Windows setup
 
-Install Python 3.12 with the Python launcher, then double-click **run_windows.bat**. You can also run it from Command Prompt:
+1. **Install Python 3.12** from [python.org](https://www.python.org/downloads/windows/) with the 64-bit Windows installer. Keep **py launcher** selected; adding Python to PATH is optional. Python 3.13 or newer also works if 3.12 is not installed.
+2. **Download the code** with **Code → Download ZIP** and extract it with **Extract All…**.
+3. **Use a short folder path.** Move the inner `Pollimi-Software-master` folder, the one containing `bead-counter`, to `C:\` and rename it `Polimi`. The app is then in `C:\Polimi\bead-counter`.
+4. **Double-click `run_windows.bat`** in that folder. If Windows shows *Windows protected your PC*, click **More info → Run anyway**.
+
+The first launch creates `.venv\`, installs the pinned packages and opens the app; this takes a few minutes and needs internet access. Later launches reuse the environment. The Command Prompt window stays open while the app runs, and closing it closes the app.
+
+**Why a short path:** Windows limits file paths to 260 characters unless long paths are enabled, and the Qt package installs files about 190 characters below the project folder. A folder such as `C:\Users\<name>\Downloads\Pollimi-Software-master\Pollimi-Software-master` is too long. Setup checks this before installing and explains what to do. Enabling Windows long-path support also removes the limit.
+
+The launcher uses an existing `.venv\` first, then `py -3.12`, then any Python 3.12 or newer. To run it from Command Prompt, for example with command-line options:
 
 ```bat
-cd C:\path\to\Pollimi-Software\bead-counter
-run_windows.bat
+cd /d C:\Polimi\bead-counter
+run_windows.bat --headless --input C:\data\my_stack.h5 --save-stack
 ```
 
 Setup is automatic and does not need PowerShell activation. Manual installation is also possible:
@@ -65,6 +74,8 @@ py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 .venv\Scripts\python.exe bead_counter.py
 ```
+
+To update, save your `results` folder, then replace the code with a new ZIP download. With [Git for Windows](https://git-scm.com/download/win), clone the repository into `C:\Polimi` instead and update with `git pull`; `.venv\` and `results\` are kept.
 
 ## macOS setup
 
@@ -184,6 +195,13 @@ Tests cover fading, longer continuations, resets, missing frames, exact coordina
 - **Qt `xcb` / `libxcb-cursor.so.0` error on Linux:** install the runtime libraries listed above. Other requirements depend on the distribution; see [Qt Linux requirements](https://doc.qt.io/qt-6/linux-requirements.html).
 - **No desktop display:** use `--headless` for processing; offscreen mode is intended for tests.
 - **No image dataset found:** check the numeric 3-D shape and axis order.
+
+On Windows:
+
+- **"Python 3.12 or newer was not found":** install Python from python.org with **py launcher** selected, then run `run_windows.bat` again. The Microsoft Store `python` shortcut does not count as an installation.
+- **"This folder path is too long for Windows":** move the folder to `C:\Polimi\bead-counter`, delete any `.venv` folder created there, and run the launcher again.
+- **Installation stopped or failed partway:** delete `.venv` in `bead-counter` and run `run_windows.bat` again with internet access.
+- **Windows protected your PC:** click **More info → Run anyway**; the launcher is a plain text file you can open in Notepad to check.
 
 ## Source files
 
