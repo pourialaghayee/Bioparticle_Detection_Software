@@ -172,8 +172,16 @@ class MainWindow(QMainWindow):
             file_menu.addAction(action)
         help_menu = self.menuBar().addMenu("Help")
         instructions = QAction("Open instructions", self)
-        instructions.triggered.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(APP_DIR/"README.md"))))
+        instructions.triggered.connect(self.open_instructions)
         help_menu.addAction(instructions)
+
+    def open_instructions(self):
+        # The project has one README, next to the bead-counter folder.
+        readme = APP_DIR.parent/"README.md"
+        if readme.is_file():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(readme)))
+        else:
+            self.show_error("README.md was not found next to the bead-counter folder.")
 
     def _build_ui(self):
         root = QWidget()
