@@ -34,9 +34,19 @@ with tempfile.TemporaryDirectory() as temporary:
     window.show()
     window.load_source(source, DEFAULT_KEY)
     app.processEvents()
-    for caption in ("Box width", "Black level", "White level", "Threshold (noise σ)"):
+    for caption in ("Box width", "Black level", "White level", "Threshold (noise σ)",
+                    "Flow rate", "Radius", "Max frames"):
         matching = [label for label in window.findChildren(QLabel) if label.text() == caption]
         assert len(matching) == 1 and matching[0].width() > 40, f"Hidden form label: {caption}"
+    assert not [label for label in window.findChildren(QLabel) if "dilation" in label.text().lower()]
+    stack = make_stack(root/"levels.h5")
+    original = (float(stack.min()), float(stack.max()))
+    assert (window.display_low.value(), window.display_high.value()) == original
+    assert window.original_check.isChecked()
+    window.display_high.setValue(30)
+    assert not window.original_check.isChecked()
+    window.original_check.setChecked(True)
+    assert (window.display_low.value(), window.display_high.value()) == original
     assert window.frame_spin.maximum() == 11
     assert window.run_button.isEnabled()
     window.frame_spin.setValue(4)
@@ -46,7 +56,9 @@ with tempfile.TemporaryDirectory() as temporary:
     # Run through the real Count button, with a temporary output directory.
     failures = []
     window.show_error = failures.append
-    window.merge.setValue(0)
+    window.flow_rate.setValue(0.5)
+    window.radius.setValue(15)
+    window.max_frames.setValue(10)
     previous_app_dir = viewer_gui.APP_DIR
     viewer_gui.APP_DIR = root
     QTest.mouseClick(window.run_button, Qt.MouseButton.LeftButton)
@@ -57,6 +69,8 @@ with tempfile.TemporaryDirectory() as temporary:
     assert not failures, failures
     result, folder = window.result, window.result_folder
     assert result is not None and (folder/"all_beads.png").exists()
+    assert (result.settings.flow_rate_ul_min, result.settings.radius_px,
+            result.settings.max_frames) == (0.5, 15, 10)
     assert window.run_button.isEnabled()
     assert window.count_label.text() == str(len(result.events))
     assert window.table.rowCount() == len(result.for_frame(3))
@@ -75,7 +89,7 @@ with tempfile.TemporaryDirectory() as temporary:
     assert not window.timer.isActive()
 
     saved, export_failures = [], []
-    exporter = StackExportWorker(result, str(root/"boxed.tif"), 40, 0, 30)
+    exporter = StackExportWorker(result, str(root/"boxed.tif"), 40, *original)
     exporter.completed.connect(saved.append)
     exporter.failed.connect(export_failures.append)
     exporter.start()
@@ -86,7 +100,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
     # Cancellation also works in a background GUI job.
     was_cancelled = []
-    cancellation = ProcessingWorker(source, DEFAULT_KEY, DetectorSettings(), root/"cancel", 40, 0, 30)
+    cancellation = ProcessingWorker(source, DEFAULT_KEY, DetectorSettings(), root/"cancel", 40, *original)
     cancellation.stop_requested.set()
     cancellation.cancelled.connect(lambda: was_cancelled.append(True))
     cancellation.start()
@@ -99,7 +113,7 @@ if len(sys.argv) > 1:
     folder = Path(sys.argv[1])
     result = load_result(folder)
     window = MainWindow()
-    window.load_source(result.source, result.dataset_key)
+    window.load_source(result.source, result.dataset_key, result.original_levels)
     window.install_result(result, folder)
     # Show the frame containing the most detections so the preview is informative.
     frame = max(range(result.shape[0]), key=lambda t: len(result.for_frame(t)))
@@ -113,5 +127,6 @@ if len(sys.argv) > 1:
     app.processEvents()
     window.grab().save(str(output.with_name("overview_preview.png")))
     window.close()
-print("GUI smoke checks passed: loading, counting worker, frame navigation, brightness table, "
-      "display controls, playback, overview, TIFF worker, cancellation.")
+print("GUI smoke checks passed: loading, original levels, detection inputs, counting worker, "
+      "frame navigation, brightness table, display controls, playback, overview, TIFF worker, "
+      "cancellation.")

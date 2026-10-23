@@ -14,10 +14,18 @@ def main():
     parser.add_argument("--result", type=Path, help="Open an existing results folder in the GUI")
     parser.add_argument("--headless", action="store_true", help="Count and save without opening the GUI")
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent/"results")
-    parser.add_argument("--threshold", type=float, default=6.0)
-    parser.add_argument("--merge", type=int, default=20)
+    parser.add_argument("--threshold", type=float, default=6.0, help="Detection threshold in noise σ")
+    parser.add_argument("--radius", type=float, default=20.0,
+                        help="Pixels within which a spot is the same bead (default 20)")
+    parser.add_argument("--max-frames", type=int, default=7,
+                        help="Frames one bead can last; later spots count as new beads (default 7)")
+    parser.add_argument("--flow-rate", type=float,
+                        help="Flow rate in µl/min; saved in the results only")
     parser.add_argument("--box-size", type=int, default=40)
-    parser.add_argument("--display-max", type=float, default=30.0)
+    parser.add_argument("--display-min", type=float,
+                        help="Display black level; default is the recording's darkest value")
+    parser.add_argument("--display-max", type=float,
+                        help="Display white level; default is the recording's brightest value")
     parser.add_argument("--save-stack", action="store_true", help="Also export a boxed RGB TIFF movie")
     args = parser.parse_args()
     if args.headless:
@@ -35,13 +43,17 @@ def main():
             if percent >= last_percent+10:
                 print(f"{percent:3d}%  {message}", flush=True)
                 last_percent = percent
-        result = analyse(args.input, key,
-            DetectorSettings(threshold_sigma=args.threshold, merge_iterations=args.merge), progress)
-        folder = export_results(result, args.output, args.box_size, high=args.display_max)
+        if (args.display_min is None) != (args.display_max is None):
+            parser.error("Give both --display-min and --display-max, or neither.")
+        settings = DetectorSettings(threshold_sigma=args.threshold, radius_px=args.radius,
+                                    max_frames=args.max_frames, flow_rate_ul_min=args.flow_rate)
+        result = analyse(args.input, key, settings, progress)
+        levels = dict(low=args.display_min, high=args.display_max)
+        folder = export_results(result, args.output, args.box_size, **levels)
         if args.save_stack:
             export_boxed_stack(result, folder/"boxed_stack.tif", args.box_size,
-                               high=args.display_max, progress=progress)
-        print(f"Counted events: {len(result.events)}; frame detections: {len(result.detections)}")
+                               progress=progress, **levels)
+        print(f"Counted beads: {len(result.events)}; frame detections: {len(result.detections)}")
         print(f"Saved: {folder}")
         return 0
     from viewer_gui import run_gui

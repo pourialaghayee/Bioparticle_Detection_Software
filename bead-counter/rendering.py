@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import tifffile
 
-from counter_core import Analysis, check_cancel, read_frame
+from counter_core import Analysis, check_cancel, is_new, read_frame
 
 NEW_COLOUR = "#67f59b"
 FADE_COLOUR = "#ffc565"
@@ -42,6 +42,15 @@ def brightness_text(value):
     return f"{value:.0f}" if value == int(value) else f"{value:.1f}"
 
 
+def original_levels(result: Analysis, low=None, high=None):
+    """Use the recording's darkest-to-brightest range unless levels are given."""
+    if low is not None and high is not None:
+        return low, high
+    if result.original_levels:
+        return result.original_levels
+    return float(result.projection.min()), float(max(result.projection.max(), result.projection.min()+1))
+
+
 def label(draw, position, text, colour, size, width, height):
     face = font(size)
     text_width = draw.textbbox((0, 0), text, font=face)[2]
@@ -56,7 +65,7 @@ def render_frame(raw, detections, box_size=40, low=0.0, high=30.0, show_labels=T
     draw = ImageDraw.Draw(image)
     half = max(2, int(box_size)//2)
     for detection in detections:
-        colour = FADE_COLOUR if detection.association == "stationary_fade" else NEW_COLOUR
+        colour = NEW_COLOUR if is_new(detection) else FADE_COLOUR
         x, y = detection.x, detection.y
         draw.rectangle((max(0, x-half), max(0, y-half),
                         min(image.width-1, x+half), min(image.height-1, y+half)),
@@ -68,9 +77,10 @@ def render_frame(raw, detections, box_size=40, low=0.0, high=30.0, show_labels=T
     return image
 
 
-def render_overview(result: Analysis, box_size=40, low=0.0, high=30.0,
+def render_overview(result: Analysis, box_size=40, low=None, high=None,
                     show_labels=True, banner=True):
     """Every event is represented; repeated positions list every ID in one label."""
+    low, high = original_levels(result, low, high)
     image = grayscale(result.projection, low, high)
     draw = ImageDraw.Draw(image)
     groups = defaultdict(list)
@@ -92,11 +102,12 @@ def render_overview(result: Analysis, box_size=40, low=0.0, high=30.0,
         out = Image.new("RGB", (max(image.width, 900), image.height+108), "#101c2b")
         out.paste(image, (0, 108))
         draw = ImageDraw.Draw(out)
-        draw.text((18, 10), f"All counted events: {len(result.events)}  |  "
+        draw.text((18, 10), f"All counted beads: {len(result.events)}  |  "
                   f"{result.shape[0]} frames  |  {len(result.detections)} frame detections",
                   font=font(22), fill=TEXT_COLOUR)
-        draw.text((18, 43), "Maximum projection + event IDs. Multiple IDs in one box = "
-                  "different events at that position.", font=font(16), fill="#bad0df")
+        draw.text((18, 43), f"Maximum projection + bead IDs at first position. Same bead = within "
+                  f"{result.settings.radius_px:g} px during its first {result.settings.max_frames} frames.",
+                  font=font(16), fill="#bad0df")
         draw.text((18, 73), "Count comes from individual frames. Review boxes to check "
                   "candidate accuracy; nearby labels may overlap.", font=font(16), fill="#bad0df")
         return out
@@ -111,8 +122,9 @@ def write_csv(path, rows, fields):
 
 
 def export_results(result: Analysis, output_root: str | Path, box_size=40,
-                   low=0.0, high=30.0, cancel=None) -> Path:
+                   low=None, high=None, cancel=None) -> Path:
     """Commit a new run folder only after all required outputs are complete."""
+    low, high = original_levels(result, low, high)
     root = Path(output_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     stem = re.sub(r"[^a-zA-Z0-9_.-]", "_", Path(result.source).stem)
@@ -133,47 +145,51 @@ def export_results(result: Analysis, output_root: str | Path, box_size=40,
             detections.append(row)
         write_csv(temporary/"detections.csv", detections,
                   ["frame_index", "frame_number", "event_id", "x", "y", "brightness",
-                   "peak_snr", "association"])
+                   "peak_snr", "association", "distance_px"])
         events = []
         for event in result.events:
             row = asdict(event)
             row["first_frame_number"] = row["first_frame"]+1
             row["last_frame_number"] = row["last_frame"]+1
+            row["frames_seen"] = row.pop("observations")
+            row["displacement_px"] = round(event.displacement_px, 2)
             events.append(row)
         write_csv(temporary/"events.csv", events,
-                  ["event_id", "x", "y", "first_frame", "last_frame", "first_frame_number",
-                   "last_frame_number", "observations", "first_brightness", "last_brightness",
-                   "start_reason"])
+                  ["event_id", "x", "y", "last_x", "last_y", "first_frame", "last_frame",
+                   "first_frame_number", "last_frame_number", "frames_seen", "displacement_px",
+                   "first_brightness", "last_brightness"])
         cumulative = 0
         rows = []
         for frame in range(result.shape[0]):
             found = result.for_frame(frame)
-            new = sum(d.association != "stationary_fade" for d in found)
+            new = sum(is_new(d) for d in found)
             cumulative += new
             rows.append(dict(frame_index=frame, frame_number=frame+1, detections=len(found),
-                             new_events=new, continuations=len(found)-new,
-                             cumulative_events=cumulative))
+                             new_beads=new, same_bead_again=len(found)-new,
+                             cumulative_beads=cumulative))
         write_csv(temporary/"per_frame.csv", rows,
-                  ["frame_index", "frame_number", "detections", "new_events", "continuations",
-                   "cumulative_events"])
+                  ["frame_index", "frame_number", "detections", "new_beads", "same_bead_again",
+                   "cumulative_beads"])
         summary = result.summary()
         summary["display"] = dict(box_size_px=box_size, minimum=low, maximum=high,
                                   note="Display contrast and box size do not change detections.")
         (temporary/"summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False),
                                              encoding="utf-8")
         (temporary/"READ_ME.txt").write_text(
-            "all_beads.png: maximum projection with every counted event ID. Several events "
-            "at exactly one position share a box; their IDs are listed together.\n"
+            "all_beads.png: maximum projection with every counted bead ID at its first position. "
+            "Several beads at exactly one position share a box; their IDs are listed together.\n"
             "maximum_projection_raw.tif: unmodified maximum pixel values, without boxes.\n"
-            "events.csv: one row per counted event. detections.csv: one row per frame detection.\n"
+            "events.csv: one row per counted bead. detections.csv: one row per frame detection; "
+            "distance_px is the distance to that bead's previous position.\n"
             "per_frame.csv: frame counts and cumulative count. summary.json: source, settings, "
             "association rule and totals.\n"
             "Frame numbers displayed in the GUI start at 1; *_index and first/last_frame "
             "columns start at 0. Coordinates (x,y) start at 0.\n"
-            "B is the local raw peak camera count. A strictly decreasing B at exactly the "
-            "same detected pixel in adjacent frames keeps the ID. No moving or gap links.\n"
-            "A new arrival that is dimmer at the identical pixel cannot be distinguished "
-            "from a fade using these images alone. Counts require visual review.\n",
+            f"Same bead: within {result.settings.radius_px:g} px of its last position during its "
+            f"first {result.settings.max_frames} frames, even after missed frames. "
+            "B is the local raw peak camera count, shown for review only.\n"
+            "A new bead arriving within the radius of a recent bead is merged with it. "
+            "Counts require visual review.\n",
             encoding="utf-8")
         check_cancel(cancel)
         temporary.rename(destination)
@@ -184,8 +200,9 @@ def export_results(result: Analysis, output_root: str | Path, box_size=40,
 
 
 def export_boxed_stack(result: Analysis, destination: str | Path, box_size=40,
-                       low=0.0, high=30.0, progress=None, cancel=None):
+                       low=None, high=None, progress=None, cancel=None):
     """Write an RGB TIFF movie page by page; preserve the source's raw values separately."""
+    low, high = original_levels(result, low, high)
     import h5py
     destination = Path(destination).resolve()
     if destination == Path(result.source).resolve():
@@ -215,21 +232,26 @@ def export_boxed_stack(result: Analysis, destination: str | Path, box_size=40,
 
 def load_result(folder: str | Path) -> Analysis:
     """Reload a saved result for viewing without repeating detection."""
-    from counter_core import Detection, DetectorSettings, Event
+    from counter_core import Detection, DetectorSettings, Event, display_levels
     folder = Path(folder)
     summary = json.loads((folder/"summary.json").read_text(encoding="utf-8"))
     detections, events = [], []
     with (folder/"detections.csv").open(newline="", encoding="utf-8") as stream:
         for row in csv.DictReader(stream):
             detections.append(Detection(int(row["frame_index"]), int(row["y"]), int(row["x"]),
-                float(row["brightness"]), float(row["peak_snr"]), int(row["event_id"]), row["association"]))
+                float(row["brightness"]), float(row["peak_snr"]), int(row["event_id"]), row["association"],
+                float(row.get("distance_px") or 0)))
     with (folder/"events.csv").open(newline="", encoding="utf-8") as stream:
         for row in csv.DictReader(stream):
             events.append(Event(int(row["event_id"]), int(row["y"]), int(row["x"]),
-                int(row["first_frame"]), int(row["last_frame"]), int(row["observations"]),
-                float(row["first_brightness"]), float(row["last_brightness"]), row["start_reason"]))
+                int(row["first_frame"]), int(row["last_frame"]),
+                int(row.get("frames_seen") or row["observations"]),
+                float(row["first_brightness"]), float(row["last_brightness"]),
+                int(row.get("last_y") or -1), int(row.get("last_x") or -1)))
+    levels = summary.get("original_display_levels")
     return Analysis(summary["source"], summary["dataset_key"], tuple(summary["shape_frames_y_x"]),
-        summary["dtype"], summary["metadata"], DetectorSettings(**summary["settings"]), detections,
-        events, summary["per_frame_filtered_noise_sigma"],
+        summary["dtype"], summary["metadata"], DetectorSettings.from_saved(summary["settings"]),
+        detections, events, summary["per_frame_filtered_noise_sigma"],
         tifffile.imread(folder/"maximum_projection_raw.tif").astype(np.float32),
-        summary["analysis_seconds"], summary["source_sha256"])
+        summary["analysis_seconds"], summary["source_sha256"],
+        display_levels(*levels) if levels else None)

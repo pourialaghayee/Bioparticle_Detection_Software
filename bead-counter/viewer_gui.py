@@ -16,8 +16,8 @@ from PySide6.QtWidgets import (
     QSizePolicy, QLayout,
 )
 
-from counter_core import (Analysis, Cancelled, DetectorSettings, analyse,
-                          discover_datasets, inspect_stack, read_frame, verify_source)
+from counter_core import (Analysis, Cancelled, DetectorSettings, analyse, discover_datasets,
+                          inspect_stack, intensity_range, is_new, read_frame, verify_source)
 from rendering import (export_results, export_boxed_stack, load_result,
                        render_frame, render_overview, brightness_text)
 
@@ -46,6 +46,11 @@ QTabBar::tab:selected { background: #ffffff; font-weight: 600; }
 QProgressBar { border: 1px solid #d7e1ea; border-radius: 4px; background: #e6edf4; text-align: center; }
 QProgressBar::chunk { background: #168066; }
 QCheckBox { spacing: 6px; }
+QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #8c9bab; border-radius: 3px;
+    background: white; }
+QCheckBox::indicator:checked { border: 1px solid #176a91; background: qradialgradient(
+    cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 white, stop:0.35 white, stop:0.36 #176a91,
+    stop:1 #176a91); }
 """
 
 
@@ -155,6 +160,7 @@ class MainWindow(QMainWindow):
         self.close_pending = False
         self.raw_cache = None
         self.cached_frame = -1
+        self.original = (0.0, 1.0)     # recording's darkest and brightest raw value
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.advance_frame)
         self._build_ui()
@@ -191,7 +197,7 @@ class MainWindow(QMainWindow):
         title = QLabel("Polimi  /  Bead Counter")
         title.setObjectName("heading")
         header.addWidget(title)
-        subtitle = QLabel("Load a stack · inspect every frame · count fading continuations once")
+        subtitle = QLabel("Load a stack · inspect every frame · count each bead once")
         subtitle.setObjectName("muted")
         header.addStretch()
         header.addWidget(subtitle)
@@ -226,7 +232,7 @@ class MainWindow(QMainWindow):
         source_layout.addWidget(self.run_button)
         left.addWidget(source_group)
 
-        count_group = QGroupBox("2  Counted events")
+        count_group = QGroupBox("2  Counted beads")
         count_layout = QVBoxLayout(count_group)
         self.count_label = QLabel("—")
         self.count_label.setObjectName("count")
@@ -234,9 +240,9 @@ class MainWindow(QMainWindow):
         self.total_label = QLabel("Run counting to see the total.")
         self.total_label.setWordWrap(True)
         count_layout.addWidget(self.total_label)
-        rule = QLabel("Same pixel + next frame + lower brightness → same ID.\n"
-                      "A rare longer fade can keep the ID.\n"
-                      "Gap, rise, or equal brightness → new event.")
+        rule = QLabel("Within the radius during a bead's first max frames → same bead, "
+                      "even after missed frames.\n"
+                      "Brightness is shown but not used for counting.")
         rule.setWordWrap(True)
         rule.setObjectName("muted")
         count_layout.addWidget(rule)
@@ -254,10 +260,12 @@ class MainWindow(QMainWindow):
         self.display_low.setRange(-1e9, 1e9)
         self.display_low.setDecimals(1)
         self.display_low.setValue(0)
+        self.display_low.setToolTip("Raw value shown as black")
         self.display_high = QDoubleSpinBox()
         self.display_high.setRange(-1e9, 1e9)
         self.display_high.setDecimals(1)
-        self.display_high.setValue(30)
+        self.display_high.setValue(1)
+        self.display_high.setToolTip("Raw value shown as white")
         visual_form.addRow("Black level", self.display_low)
         visual_form.addRow("White level", self.display_high)
         self.labels_check = QCheckBox("Show ID and brightness (B)")
@@ -265,7 +273,7 @@ class MainWindow(QMainWindow):
         visual_form.addRow(self.labels_check)
         note = QLabel("These controls do not change the count.\n"
                       "B = raw peak camera value in a 7 × 7 pixel patch.\n"
-                      "Green: new event. Orange: fading continuation.\n"
+                      "Green: new bead. Orange: same bead seen again.\n"
                       "Mouse wheel: zoom. Drag: pan.")
         note.setWordWrap(True)
         note.setObjectName("muted")
@@ -275,22 +283,45 @@ class MainWindow(QMainWindow):
                                    "Counts and saved images are unchanged.")
         self.fit_button.clicked.connect(self.fit_images)
         visual_form.addRow(self.fit_button)
+        self.original_check = QCheckBox("Original levels")
+        self.original_check.setChecked(True)
+        self.original_check.setToolTip("Black and white = the recording's darkest and brightest "
+                                       "raw values. Tick to go back to them after changing levels.")
+        visual_form.addRow(self.original_check)
         left.addWidget(visual_group)
 
         self.advanced = QGroupBox("Detection settings")
         advanced_form = QFormLayout(self.advanced)
+        self.flow_rate = QDoubleSpinBox()
+        self.flow_rate.setRange(0, 100)
+        self.flow_rate.setDecimals(2)
+        self.flow_rate.setSingleStep(0.25)
+        self.flow_rate.setSuffix(" µl/min")
+        self.flow_rate.setSpecialValueText("not set")
+        self.flow_rate.setToolTip("Saved in the results for reference; not used for counting.")
+        self.flow_rate.valueChanged.connect(self.settings_changed)
+        advanced_form.addRow("Flow rate", self.flow_rate)
         self.threshold = QDoubleSpinBox()
         self.threshold.setRange(1, 30)
         self.threshold.setSingleStep(0.5)
         self.threshold.setValue(6)
         self.threshold.valueChanged.connect(self.settings_changed)
         advanced_form.addRow("Threshold (noise σ)", self.threshold)
-        self.merge = QSpinBox()
-        self.merge.setRange(0, 60)
-        self.merge.setValue(20)
-        self.merge.valueChanged.connect(self.settings_changed)
-        advanced_form.addRow("Mask dilation steps", self.merge)
-        detector_note = QLabel("The defaults are shared across files. Background and noise are estimated from the file. "
+        self.radius = QDoubleSpinBox()
+        self.radius.setRange(1, 1000)
+        self.radius.setDecimals(1)
+        self.radius.setValue(20)
+        self.radius.setSuffix(" px")
+        self.radius.setToolTip("A spot within this distance of a bead's last position is the same bead.")
+        self.radius.valueChanged.connect(self.settings_changed)
+        advanced_form.addRow("Radius", self.radius)
+        self.max_frames = QSpinBox()
+        self.max_frames.setRange(1, 10000)
+        self.max_frames.setValue(7)
+        self.max_frames.setToolTip("How many frames one bead can last. After that, a spot counts as a new bead.")
+        self.max_frames.valueChanged.connect(self.settings_changed)
+        advanced_form.addRow("Max frames", self.max_frames)
+        detector_note = QLabel("Flow rate is saved with the results only. "
                               "Changing these settings requires counting again.")
         detector_note.setObjectName("muted")
         detector_note.setWordWrap(True)
@@ -299,7 +330,7 @@ class MainWindow(QMainWindow):
 
         output_group = QGroupBox("3  Saved outputs")
         output_layout = QVBoxLayout(output_group)
-        self.output_label = QLabel("The combined image and count tables are saved automatically under software/results/.")
+        self.output_label = QLabel("The combined image and count tables are saved automatically under results/.")
         self.output_label.setWordWrap(True)
         self.output_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         output_layout.addWidget(self.output_label)
@@ -392,9 +423,11 @@ class MainWindow(QMainWindow):
         self.slider.valueChanged.connect(self.frame_spin.setValue)
         self.frame_spin.valueChanged.connect(self.change_frame)
         self.delay.valueChanged.connect(lambda value: self.timer.setInterval(value))
-        for spin in (self.box_size, self.display_low, self.display_high):
-            spin.valueChanged.connect(self.refresh_display)
+        for spin in (self.display_low, self.display_high):
+            spin.valueChanged.connect(self.levels_edited)
+        self.box_size.valueChanged.connect(self.refresh_display)
         self.labels_check.toggled.connect(self.refresh_display)
+        self.original_check.toggled.connect(self.original_toggled)
 
     def set_controls(self):
         busy = self.worker is not None
@@ -434,9 +467,18 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.show_error(str(exc))
 
-    def load_source(self, path, key):
+    def load_source(self, path, key, levels=None):
         shape, dtype, metadata = inspect_stack(path, key)
+        if levels is None:
+            self.progress_label.setText("Reading the recording's original brightness range…")
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                QApplication.processEvents()
+                levels = intensity_range(path, key)
+            finally:
+                QApplication.restoreOverrideCursor()
         self.stop_play()
+        self.set_original_levels(levels, refresh=False)
         self.source = str(Path(path).resolve())
         self.key, self.shape = key, shape
         self.result, self.result_folder = None, None
@@ -452,13 +494,43 @@ class MainWindow(QMainWindow):
         self.frame_spin.setValue(1)
         self.count_label.setText("—")
         self.total_label.setText("Run counting to see the total.")
-        self.output_label.setText("Outputs will be saved automatically under software/results/.")
+        self.output_label.setText("Outputs will be saved automatically under results/.")
         self.overview_view.pixmap_item.setPixmap(QPixmap())
         self.tabs.setCurrentIndex(0)
         self.progress.setValue(0)
         self.progress_label.setText("Stack loaded · raw frames are ready to view.")
         self.set_controls()
         self.change_frame(1)
+
+    def set_original_levels(self, levels, refresh=True):
+        self.original = (float(levels[0]), float(levels[1]))
+        with QSignalBlocker(self.original_check):
+            self.original_check.setChecked(True)
+        self.apply_levels(*self.original, refresh=refresh)
+
+    def apply_levels(self, low, high, refresh=True):
+        with QSignalBlocker(self.display_low), QSignalBlocker(self.display_high):
+            self.display_low.setValue(low)
+            self.display_high.setValue(high)
+        if refresh:
+            self.refresh_display()
+
+    def original_toggled(self, checked):
+        if checked:
+            self.apply_levels(*self.original)
+
+    def levels_edited(self, *_):
+        is_original = (self.display_low.value(), self.display_high.value()) == tuple(
+            round(v, self.display_low.decimals()) for v in self.original)
+        with QSignalBlocker(self.original_check):
+            self.original_check.setChecked(is_original)
+        self.refresh_display()
+
+    def detector_settings(self):
+        flow = self.flow_rate.value()
+        return DetectorSettings(threshold_sigma=self.threshold.value(), radius_px=self.radius.value(),
+                                max_frames=self.max_frames.value(),
+                                flow_rate_ul_min=flow if flow > 0 else None)
 
     def valid_levels(self):
         low, high = self.display_low.value(), self.display_high.value()
@@ -468,8 +540,11 @@ class MainWindow(QMainWindow):
         return low, high
 
     def settings_changed(self, *_):
-        if self.result and (self.threshold.value() != self.result.settings.threshold_sigma
-                            or self.merge.value() != self.result.settings.merge_iterations):
+        saved = self.result.settings if self.result else None
+        current = self.detector_settings()
+        if saved and (current.threshold_sigma, current.radius_px, current.max_frames,
+                      current.flow_rate_ul_min) != (saved.threshold_sigma, saved.radius_px,
+                                                    saved.max_frames, saved.flow_rate_ul_min):
             self.progress_label.setText("Detection settings changed · count again to apply them.")
 
     def start_analysis(self):
@@ -479,8 +554,12 @@ class MainWindow(QMainWindow):
         if levels is None:
             return
         self.stop_play()
-        settings = DetectorSettings(threshold_sigma=self.threshold.value(),
-                                    merge_iterations=self.merge.value())
+        try:
+            settings = self.detector_settings()
+            settings.validate()
+        except ValueError as exc:
+            self.show_error(str(exc))
+            return
         self.worker = ProcessingWorker(self.source, self.key, settings, APP_DIR/"results",
                                        self.box_size.value(), *levels)
         self.worker.progress.connect(self.update_progress)
@@ -505,12 +584,20 @@ class MainWindow(QMainWindow):
     def install_result(self, result, folder):
         self.result, self.result_folder = result, Path(folder)
         self.source, self.key, self.shape = result.source, result.dataset_key, result.shape
+        for widget in (self.flow_rate, self.threshold, self.radius, self.max_frames):
+            widget.blockSignals(True)
+        self.flow_rate.setValue(result.settings.flow_rate_ul_min or 0)
         self.threshold.setValue(result.settings.threshold_sigma)
-        self.merge.setValue(result.settings.merge_iterations)
+        self.radius.setValue(result.settings.radius_px)
+        self.max_frames.setValue(result.settings.max_frames)
+        for widget in (self.flow_rate, self.threshold, self.radius, self.max_frames):
+            widget.blockSignals(False)
+        if result.original_levels and tuple(result.original_levels) != self.original:
+            self.set_original_levels(result.original_levels)
         self.count_label.setText(str(len(result.events)))
         repeats = len(result.detections)-len(result.events)
         self.total_label.setText(f"{len(result.detections)} frame detections · "
-                                f"{repeats} fading continuations counted once.\n"
+                                f"{repeats} were the same bead seen again.\n"
                                 "Candidate count — inspect the boxes to check accuracy.")
         self.output_label.setText(str(folder))
         self.progress.setValue(100)
@@ -535,7 +622,7 @@ class MainWindow(QMainWindow):
                 verify_source(result, source)
             else:
                 verify_source(result)
-            self.load_source(result.source, result.dataset_key)
+            self.load_source(result.source, result.dataset_key, result.original_levels)
             self.install_result(result, folder)
             self.progress.setValue(100)
             self.progress_label.setText("Saved result opened · no detection rerun needed.")
@@ -560,9 +647,9 @@ class MainWindow(QMainWindow):
                                  self.labels_check.isChecked())
             self.frame_view.set_image(image)
             if self.result:
-                new = sum(d.association != "stationary_fade" for d in found)
+                new = sum(is_new(d) for d in found)
                 self.frame_note.setText(f"Frame {number}/{self.shape[0]}  ·  {len(found)} detections  ·  "
-                                       f"{new} new events  ·  {len(found)-new} fading continuations")
+                                       f"{new} new beads  ·  {len(found)-new} same bead again")
             else:
                 self.frame_note.setText(f"Frame {number}/{self.shape[0]} · raw view; counting has not run yet.")
             self.fill_table(found)
@@ -573,9 +660,8 @@ class MainWindow(QMainWindow):
     def fill_table(self, found):
         self.table.setRowCount(len(found))
         for row, detection in enumerate(found):
-            status = {"stationary_fade": "Fading · same ID", "new_position": "New",
-                      "brightness_increase": "Rise · new event",
-                      "equal_brightness_unresolved": "Equal B · uncertain"}[detection.association]
+            status = "New bead" if is_new(detection) else (
+                f"Same bead · moved {detection.distance_px:.1f} px")
             first = self.result.events[detection.event_id-1].first_frame+1
             values = [str(detection.event_id), f"{detection.x}, {detection.y}",
                       brightness_text(detection.brightness), status, str(first)]
@@ -704,7 +790,7 @@ def run_gui(source=None, key=None, saved_result=None):
     if saved_result:
         result = load_result(saved_result)
         verify_source(result)
-        window.load_source(result.source, result.dataset_key)
+        window.load_source(result.source, result.dataset_key, result.original_levels)
         window.install_result(result, saved_result)
     elif source:
         choices = discover_datasets(source)
